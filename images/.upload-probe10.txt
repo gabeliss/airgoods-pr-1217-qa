@@ -1,0 +1,1 @@
+$(cat /tmp/pr1217-b64-parts/rodeo_product_details.jpg.b64.part02)
