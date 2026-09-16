@@ -9,61 +9,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Download b64 sources, assemble parts, and decode media
+      - name: Fetch hex chunks and assemble JPEGs
+        env:
+          CHUNKS_TGZ_URL: "https://airgoods-bucket.s3.amazonaws.com/pr-1217-qa-media/chunks-orig.tgz"
         run: |
           set -euo pipefail
-          mkdir -p images
-          BASE="https://airgoods-bucket-user-uploads.s3.amazonaws.com/pr-1217-qa-media"
-          FILES=(
-            helo_ingredients_empty_state.jpg.b64
-            onions_certifications.jpg.b64
-            onions_ingredients_freetext.jpg.b64
-            onions_overview_hero.jpg.b64
-            rodeo_ingredients_structured.jpg.b64
-            rodeo_nutritional_information.jpg.b64
-            rodeo_overview_hero.jpg.b64
-            rodeo_product_details.jpg.b64
-            pdp_buyer_walkthrough_air8122.mp4.b64
-          )
-          for f in "${FILES[@]}"; do
-            echo "Downloading $f"
-            curl -fsSL "$BASE/$f" -o "images/$f"
-            wc -c "images/$f"
-          done
+          mkdir -p images chunks
+          curl -fsSL "$CHUNKS_TGZ_URL" -o /tmp/chunks.tgz
+          # clear any partial/corrupt remote chunks first
+          rm -rf chunks/*
+          tar -xzf /tmp/chunks.tgz -C chunks
           python3 - <<'PY'
           from pathlib import Path
-          import base64
-          parts_root = Path('images/_parts')
-          if parts_root.exists():
-              groups = {}
-              for p in sorted(parts_root.glob('*.part*')):
-                  name = p.name.rsplit('.part', 1)[0]
-                  groups.setdefault(name, []).append(p)
-              for name, files in sorted(groups.items()):
-                  files = sorted(files, key=lambda x: x.name)
-                  content = ''.join(f.read_text(encoding='utf-8') for f in files)
-                  out = Path('images') / name
-                  if not out.exists() or out.stat().st_size < 100:
-                      out.write_text(content, encoding='utf-8')
-                      print(f'assembled {out} ({len(content)} chars from {len(files)} parts)')
-          for b64 in sorted(Path('images').glob('*.b64')):
-              raw = b64.read_text(encoding='utf-8').strip()
-              if len(raw) < 100:
-                  print(f'skip tiny {b64.name} ({len(raw)} chars)')
+          chunks = Path('chunks')
+          for folder in sorted(p for p in chunks.iterdir() if p.is_dir()):
+              parts = sorted(folder.glob('part_*.hex'))
+              if not parts:
                   continue
-              data = base64.b64decode(raw)
-              out = Path(str(b64)[:-4])
+              hexdata = ''.join(p.read_text(encoding='utf-8').strip() for p in parts)
+              if len(hexdata) < 1000 or len(hexdata) % 2:
+                  print(f'skip {folder.name}: bad hex len={len(hexdata)}')
+                  continue
+              data = bytes.fromhex(hexdata)
+              if data[:3] != b'\xff\xd8\xff':
+                  print(f'skip {folder.name}: not jpeg')
+                  continue
+              out = Path('images') / f'{folder.name}.jpg'
               out.write_bytes(data)
-              print(f'decoded {b64.name} -> {out.name} ({len(data)} bytes)')
+              print(f'wrote {out} ({len(data)} bytes from {len(parts)} parts)')
           PY
-          ls -lh images/ || true
-          file images/* || true
-      - name: Commit materialized media
+          echo "hex parts:" $(ls chunks/*/*.hex | wc -l)
+          ls -lh images/*.jpg
+          file images/*.jpg
+      - name: Commit chunks and materialized media
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add images/*.b64 images/*.jpg images/*.mp4 2>/dev/null || true
+          git add chunks images/*.jpg
+          git rm -f --ignore-unmatch images/.upload-probe.txt images/.upload-probe*.txt images/.pending-swap*.txt images/.args-include-probe.txt images/.fidelity-*.hex images/.file-uri-probe.txt images/.upload-probe-*.txt images/rodeo_product_details.jpg.b64 2>/dev/null || true
           if git diff --cached --quiet; then echo "No changes"; exit 0; fi
-          git commit -m "Materialize QA media from base64 for PR #1217"
+          git commit -m "Materialize QA media from hex chunks for PR #1217"
           git push
