@@ -1,9 +1,6 @@
 name: Materialize QA media
 on:
   push:
-    paths:
-      - 'images/**.b64'
-      - '.github/workflows/materialize-images.yml'
   workflow_dispatch:
 permissions:
   contents: write
@@ -12,25 +9,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Decode base64 media
+      - name: Assemble hex parts into JPEGs
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          for f in images/*.b64; do
-            out="${f%.b64}"
-            base64 -d "$f" > "$out"
-            echo "decoded $out ($(wc -c < "$out") bytes)"
-          done
+          mkdir -p images
+          python3 - <<'PY'
+          from pathlib import Path
+          for d in sorted(Path('chunks').glob('*/')):
+              name=d.name
+              hx=''.join(p.read_text().strip() for p in sorted(d.glob('part_*.hex')))
+              out=Path('images')/f'{name}.jpg'
+              out.write_bytes(bytes.fromhex(hx))
+              print(name, out.stat().st_size)
+          PY
+          file images/*.jpg || true
           ls -lh images/
-      - name: Commit decoded media
+      - name: Commit images
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add images/
-          if git diff --cached --quiet; then
-            echo "No media changes"
-            exit 0
-          fi
-          git commit -m "Materialize QA screenshots and walkthrough for PR #1217"
+          git add images/*.jpg
+          if git diff --cached --quiet; then echo "No changes"; exit 0; fi
+          git commit -m "Materialize QA JPEGs for PR #1217"
           git push
