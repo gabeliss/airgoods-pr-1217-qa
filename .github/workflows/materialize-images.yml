@@ -9,27 +9,44 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Assemble hex parts into JPEGs
+      - name: Assemble b64 parts and decode media
         run: |
           set -euo pipefail
           mkdir -p images
           python3 - <<'PY'
           from pathlib import Path
-          for d in sorted(Path('chunks').glob('*/')):
-              name=d.name
-              hx=''.join(p.read_text().strip() for p in sorted(d.glob('part_*.hex')))
-              out=Path('images')/f'{name}.jpg'
-              out.write_bytes(bytes.fromhex(hx))
-              print(name, out.stat().st_size)
+          import base64
+          parts_root = Path('images/_parts')
+          if parts_root.exists():
+              groups = {}
+              for p in sorted(parts_root.glob('*.part*')):
+                  name = p.name.rsplit('.part', 1)[0]
+                  groups.setdefault(name, []).append(p)
+              for name, files in sorted(groups.items()):
+                  files = sorted(files, key=lambda x: x.name)
+                  content = ''.join(f.read_text(encoding='utf-8') for f in files)
+                  out = Path('images') / name
+                  out.write_text(content, encoding='utf-8')
+                  print(f'assembled {out} ({len(content)} chars from {len(files)} parts)')
+          for b64 in sorted(Path('images').glob('*.b64')):
+              raw = b64.read_text(encoding='utf-8').strip()
+              # skip tiny placeholders
+              if len(raw) < 100:
+                  print(f'skip tiny {b64.name} ({len(raw)} chars)')
+                  continue
+              data = base64.b64decode(raw)
+              out = Path(str(b64)[:-4])
+              out.write_bytes(data)
+              print(f'decoded {b64.name} -> {out.name} ({len(data)} bytes)')
           PY
-          file images/*.jpg || true
-          ls -lh images/
-      - name: Commit images
+          ls -lh images/ || true
+          file images/* || true
+      - name: Commit materialized media
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add images/*.jpg
+          git add images/*.b64 images/*.jpg images/*.mp4 2>/dev/null || true
           if git diff --cached --quiet; then echo "No changes"; exit 0; fi
-          git commit -m "Materialize QA JPEGs for PR #1217"
+          git commit -m "Materialize QA media from base64 for PR #1217"
           git push
