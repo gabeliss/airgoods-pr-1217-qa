@@ -1,0 +1,1 @@
+cursor-file:///tmp/pr1217-chunks/rodeo_nutritional_information/part_018.hex
