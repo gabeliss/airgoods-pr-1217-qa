@@ -1,0 +1,1 @@
+cursor-file:///tmp/pr1217-qa-b64/images/rodeo_product_details.jpg.b64
